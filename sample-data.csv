@@ -1,0 +1,9 @@
+name.firstName,name.lastName,age,address.line1,address.line2,address.city,address.state,gender,phone.mobile,phone.home
+Rohit,Prasad,35,A-563 Rakshak Society,New Pune Road,Pune,Maharashtra,male,9876543210,02012345678
+Priya,Sharma,28,B-123 Green Valley,MG Road,Mumbai,Maharashtra,female,9876543211,02212345679
+Amit,Kumar,42,C-456 Sunrise Apartments,Ring Road,Delhi,Delhi,male,9876543212,01112345680
+Sneha,Patel,19,D-789 Ocean View,Marine Drive,Mumbai,Maharashtra,female,9876543213,02212345681
+Rajesh,Singh,55,E-321 Hill Station,Mall Road,Shimla,Himachal Pradesh,male,9876543214,01772345682
+Kavya,Reddy,31,F-654 Tech Park,Electronic City,Bangalore,Karnataka,female,9876543215,08012345683
+Arjun,Gupta,67,G-987 Retirement Villa,Sector 21,Noida,Uttar Pradesh,male,9876543216,01202345684
+Meera,Joshi,24,H-147 Student Housing,University Road,Pune,Maharashtra,female,9876543217,02012345685
