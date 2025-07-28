@@ -14,15 +14,20 @@ class CSVController {
       }
 
       const filePath = req.file.path
-      console.log(`Processing CSV file: ${filePath}`)
+      const fileSize = fs.statSync(filePath).size
+      console.log(`Processing CSV file: ${filePath} (${(fileSize / 1024 / 1024).toFixed(2)} MB)`)
 
       // Parse CSV file
+      const startTime = Date.now()
       const jsonData = await csvParser.parseCSVFile(filePath)
-      console.log(`Parsed ${jsonData.length} records from CSV`)
+      const parseTime = Date.now() - startTime
+      console.log(`Parsed ${jsonData.length} records from CSV in ${parseTime}ms`)
 
-      // Insert data into database
+      // Insert data into database with batch processing for large files
+      const insertStartTime = Date.now()
       const insertedCount = await this.insertUsersToDatabase(jsonData)
-      console.log(`Inserted ${insertedCount} users into database`)
+      const insertTime = Date.now() - insertStartTime
+      console.log(`Inserted ${insertedCount} users into database in ${insertTime}ms`)
 
       // Calculate and print age distribution
       await this.generateAgeDistributionReport()
@@ -34,6 +39,11 @@ class CSVController {
         success: true,
         message: `Successfully processed ${insertedCount} records`,
         recordsProcessed: insertedCount,
+        processingTime: {
+          parsing: `${parseTime}ms`,
+          insertion: `${insertTime}ms`,
+          total: `${parseTime + insertTime}ms`,
+        },
       })
     } catch (error) {
       console.error("Error processing CSV:", error)
@@ -47,49 +57,86 @@ class CSVController {
     }
   }
 
+  /**
+   * Insert users to database with batch processing for large datasets
+   * Optimized for 50k+ records
+   * @param {Array} jsonData - Array of user objects
+   * @returns {number} Number of inserted records
+   */
   async insertUsersToDatabase(jsonData) {
     const client = await pool.connect()
     let insertedCount = 0
+    const batchSize = 1000 // Process in batches of 1000 records
 
     try {
       await client.query("BEGIN")
 
-      for (const record of jsonData) {
-        // Extract mandatory fields
-        const firstName = record.name?.firstName || ""
-        const lastName = record.name?.lastName || ""
-        const fullName = `${firstName} ${lastName}`.trim()
-        const age = Number.parseInt(record.age) || 0
+      // Process in batches for better performance with large datasets
+      for (let i = 0; i < jsonData.length; i += batchSize) {
+        const batch = jsonData.slice(i, i + batchSize)
 
-        // Extract address
-        const address = record.address || null
+        // Prepare batch insert query
+        const values = []
+        const placeholders = []
 
-        // Extract additional info (everything except name, age, address)
-        const additionalInfo = { ...record }
-        delete additionalInfo.name
-        delete additionalInfo.age
-        delete additionalInfo.address
+        for (let j = 0; j < batch.length; j++) {
+          const record = batch[j]
 
-        // Insert into database
-        const insertQuery = `
-          INSERT INTO public.users (name, age, address, additional_info)
-          VALUES ($1, $2, $3, $4)
-        `
+          // Extract mandatory fields
+          const firstName = record.name?.firstName || ""
+          const lastName = record.name?.lastName || ""
+          const fullName = `${firstName} ${lastName}`.trim()
+          const age = Number.parseInt(record.age) || 0
 
-        await client.query(insertQuery, [
-          fullName,
-          age,
-          address ? JSON.stringify(address) : null,
-          Object.keys(additionalInfo).length > 0 ? JSON.stringify(additionalInfo) : null,
-        ])
+          // Validate age
+          if (age < 0 || age > 150) {
+            console.warn(`Invalid age ${age} for user ${fullName}. Setting to 0.`)
+          }
 
-        insertedCount++
+          // Extract address (all address.* properties)
+          const address = record.address || null
+
+          // Extract additional info (everything except name, age, address)
+          const additionalInfo = { ...record }
+          delete additionalInfo.name
+          delete additionalInfo.age
+          delete additionalInfo.address
+
+          // Add to batch values
+          const baseIndex = j * 4
+          placeholders.push(`($${baseIndex + 1}, $${baseIndex + 2}, $${baseIndex + 3}, $${baseIndex + 4})`)
+
+          values.push(
+            fullName,
+            age,
+            address ? JSON.stringify(address) : null,
+            Object.keys(additionalInfo).length > 0 ? JSON.stringify(additionalInfo) : null,
+          )
+        }
+
+        // Execute batch insert
+        if (placeholders.length > 0) {
+          const insertQuery = `
+            INSERT INTO public.users (name, age, address, additional_info)
+            VALUES ${placeholders.join(", ")}
+          `
+
+          await client.query(insertQuery, values)
+          insertedCount += batch.length
+
+          // Progress logging for large batches
+          if (insertedCount % 10000 === 0) {
+            console.log(`Inserted ${insertedCount} records...`)
+          }
+        }
       }
 
       await client.query("COMMIT")
+      console.log(`✓ Successfully inserted ${insertedCount} records using batch processing`)
       return insertedCount
     } catch (error) {
       await client.query("ROLLBACK")
+      console.error("Database insertion failed:", error)
       throw error
     } finally {
       client.release()
@@ -98,11 +145,25 @@ class CSVController {
 
   async getAllUsers(req, res) {
     try {
-      const result = await pool.query("SELECT * FROM public.users ORDER BY id")
+      const limit = req.query.limit ? Number.parseInt(req.query.limit) : 100
+      const offset = req.query.offset ? Number.parseInt(req.query.offset) : 0
+
+      // Get total count
+      const countResult = await pool.query("SELECT COUNT(*) as total FROM public.users")
+      const totalUsers = Number.parseInt(countResult.rows[0].total)
+
+      // Get paginated results
+      const result = await pool.query("SELECT * FROM public.users ORDER BY id LIMIT $1 OFFSET $2", [limit, offset])
+
       res.json({
         success: true,
         users: result.rows,
-        count: result.rows.length,
+        pagination: {
+          total: totalUsers,
+          limit: limit,
+          offset: offset,
+          hasMore: offset + limit < totalUsers,
+        },
       })
     } catch (error) {
       console.error("Error fetching users:", error)
